@@ -19,16 +19,16 @@ import ujson
 
 basedir = os.path.abspath(os.path.join(os.path.join(os.path.dirname(__file__), ".."), ".."))
 
-date = "11-23-16"
+date = "11-28-16"
 
 if not date in os.listdir(os.path.join(basedir, "modeling")):
 	os.mkdir(os.path.join(basedir, "modeling", date))
 
 model_dir = os.path.join(basedir, "modeling", date)
-preprocessing_dir = os.path.join(basedir, "preprocessing", "summer-2016")
-data_dir = os.path.join(basedir, "raw-data", "summer-2016")
+preprocessing_dir = os.path.join(basedir, "preprocessing", "fall-2016")
+data_dir = os.path.join(basedir, "raw-data", "fall-2016")
 
-# checkpoint = "__main__.00-0.38.hdf5"
+# checkpoint = "memex-char-lstm-fall.00-0.72.hdf5"
 checkpoint = None
 
 def clean_str(string):
@@ -63,16 +63,16 @@ def build_id_lookup(infile, outfile, limit=10000000):
             for idx,ad in enumerate(f):
                 if idx < limit:
                     ad = json.loads(ad)
-                    if ad["cluster_id"] in clusters:
-                        clusters[ad["cluster_id"]].append(ad["doc_id"])
-                    else:
-                        clusters[ad["cluster_id"]] = [ad["doc_id"]]
+                    if "doc_id" in ad:
+                        if ad["cluster_id"] in clusters:
+                            clusters[ad["cluster_id"]].append(ad["doc_id"])
+                        else:
+                            clusters[ad["cluster_id"]] = [ad["doc_id"]]
                 else:
                     break
             out.write(json.dumps(clusters, sort_keys=True, indent=4))
 
-# build_id_lookup("cp1_positives.json", "training_pos_ids")
-# build_id_lookup("CP1_negatives_all_clusters.json", "training_neg_ids")
+# build_id_lookup("CP1_train_ads.json", "training_ids")
 
 
 def read_clusters(file):
@@ -83,85 +83,112 @@ def read_clusters(file):
         clusters = eval(f.read())
         return clusters
 
-# pos_clusters_lookup = read_clusters("training_pos_ids")
-# neg_clusters_lookup = read_clusters("training_neg_ids")
+# clusters_lookup = read_clusters("training_ids")
 
-# pos_indices = np.arange(len(pos_clusters_lookup.keys()))
-# neg_indices = np.arange(len(neg_clusters_lookup.keys()))
+# indices = np.arange(len(clusters_lookup.keys()))
 
-# np.random.shuffle(pos_indices)
-# np.random.shuffle(neg_indices)
+# np.random.shuffle(indices)
 
-# pos_clusters = np.array(list(pos_clusters_lookup.keys()))[pos_indices]
-# neg_clusters = np.array(list(neg_clusters_lookup.keys()))[neg_indices]
+# clusters = np.array(list(clusters_lookup.keys()))[indices]
 
-# pos_train_clusters = pos_clusters[:int(round(len(pos_clusters)*.7, 0))]
-# neg_train_clusters = neg_clusters[:int(round(len(neg_clusters)*.7, 0))]
-
-# pos_test_clusters = pos_clusters[int(round(len(pos_clusters)*.7, 0)):]
-# neg_test_clusters = neg_clusters[int(round(len(neg_clusters)*.7, 0)):]
+# train_clusters = clusters[:int(round(len(clusters)*.8, 0))]
+# test_clusters = clusters[int(round(len(clusters)*.8, 0)):]
 
 # with open(os.path.join(model_dir, "cluster_splits"), "w") as out:
 #     splits = {}
-#     splits["pos_train"] = list(pos_train_clusters)
-#     splits["neg_train"] = list(neg_train_clusters)
-#     splits["pos_test"] = list(pos_test_clusters)
-#     splits["neg_test"] = list(neg_test_clusters)
+#     splits["train"] = list(train_clusters)
+#     splits["test"] = list(test_clusters)
 #     out.write(json.dumps(splits, indent=4))
 
 
-def get_cluster_ad_text(json_file, outfiles, cluster_id_lists):
-    """
-    Get all ads associated with a set of clusters (train or test set), write to file
-    :param json_file: original ad data
-    TODO: allowing for loading in of previous cluster splits avoid resamping clusters 
-    if re-running steps from here down 
-    """
-    with open(os.path.join(preprocessing_dir, outfiles[0]), "w") as out0:
-        with open(os.path.join(preprocessing_dir, outfiles[1]), "w") as out1:
-            with open(os.path.join(data_dir, json_file), "r") as f:
-                
-                for ad in f.readlines():
-                    ad = ujson.loads(ad)
-                    if ad["cluster_id"] in cluster_id_lists[0]:
-                        out0.write(re.sub("(\r|\n|\t)", " ", clean_str(ad["extracted_text"])) + "\n")
-                    elif ad["cluster_id"] in cluster_id_lists[1]:
-                        out1.write(re.sub("(\r|\n|\t)", " ", clean_str(ad["extracted_text"])) + "\n")
+########################################################################
 
-# get_cluster_ad_text("cp1_positives.json", ["pos_training", "pos_test"], [pos_train_clusters, pos_test_clusters])
-# get_cluster_ad_text("cp1_negatives_all_clusters.json", ["neg_training", "neg_test"], [neg_train_clusters, neg_test_clusters])
+train_clusters = None
+test_clusters = None
+
+with open(os.path.join(model_dir, "cluster_splits"), "r") as f:
+    cluster_splits = eval(f.read())
+    train_clusters = cluster_splits["train"]
+    test_clusters = cluster_splits["test"]
 
 train_docs, test_docs = [], []
-train_sentences, test_sentences = [], []
 train_classes, test_classes = [], []
 
-
-
-def build_lists(file, docs, sentences, classes=None, label=None):
-    with open(os.path.join(preprocessing_dir, file)) as f:
+def build_lists(file, train_docs, test_docs, train_classes, test_classes):
+    num_sentences = {}
+    len_sentences = {}
+    with open(os.path.join(data_dir, file)) as f:
         ads = f.readlines()
-        if label == None:
-            for ad in ads:
-                ad = eval(ad)
-                sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!|\))\s', ad[1])
-                sentences = [sent.lower() for sent in sentences]
-                docs.append(sentences)
-        else:
-            _class = [label] * len(ads)
 
-            for ad, label in zip(ads, _class):
-                sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!|\))\s', ad)
-                sentences = [sent.lower() for sent in sentences]
-                docs.append(sentences)
-                classes.append(label)
+        for idx, ad in enumerate(ads):
+            ad = ujson.loads(ad)
+            if ad["cluster_id"] in train_clusters:
+                train_sentences = re.split('(\?+|\n+|\.+)', str(ad["extracted_text"]))
+                train_sentences = [re.sub("(\r|\n|\t)", " ", clean_str(sent)).lower() for sent in train_sentences if len(sent) > 4]
+                train_sentences = [x for x in train_sentences if x is not '']
+                train_docs.append(train_sentences)
+                train_classes.append(ad["class"])
+            elif ad["cluster_id"] in test_clusters:
+                test_sentences = re.split('(\?+|\n+|\.+)', str(ad["extracted_text"]))
+                test_sentences = [re.sub("(\r|\n|\t)", " ", clean_str(sent)).lower() for sent in test_sentences if len(sent) > 4]
+                test_sentences = [x for x in test_sentences if x is not '']
+                
+                if len(test_sentences) in num_sentences:
+                    num_sentences[len(test_sentences)] += 1
+                else:
+                    num_sentences[len(test_sentences)] = 1
+
+                test_docs.append(test_sentences)
+                test_classes.append(ad["class"])
+
+            if idx % 5000 == 0:
+                print(idx)
+
+    with open("sentence_lengths", "w") as lengths:
+        lengths.write(json.dumps(num_sentences, indent=4))
 
 
-build_lists("pos_training", train_docs, train_sentences, train_classes, 1)
-build_lists("neg_training", train_docs, train_sentences, train_classes, 0)
+# build_lists("CP1_train_ads.json", train_docs, test_docs, train_classes, test_classes)
 
-build_lists("pos_test", test_docs, test_sentences, test_classes, 1)
-build_lists("neg_test", test_docs, test_sentences, test_classes, 0)
+# with open("train_docs", "w") as out:
+#     out.write(str(train_docs))
 
+# with open("test_docs", "w") as out:
+#     out.write(str(test_docs))
+
+# with open("train_classes", "w") as out:
+#     out.write(str(train_classes))
+
+# with open("test_classes", "w") as out:
+#     out.write(str(test_classes))
+
+# print('STOP')
+
+############################################################################
+
+with open("train_docs", "r") as _in:
+    train_docs = eval(_in.read())
+
+with open("test_docs", "r") as _in:
+    test_docs = eval(_in.read())
+
+with open("train_classes", "r") as _in:
+    train_classes = eval(_in.read())
+
+with open("test_classes", "r") as _in:
+    test_classes = eval(_in.read())
+
+
+# for idx, x in enumerate(test_docs):
+#     if idx < 2:
+#         print(x)
+#     else:
+#         break
+
+# train_docs = train_docs[:60]
+# test_docs = test_docs[:60]
+# train_classes = train_classes[:60]
+# test_classes = test_classes[:60]
 
 txt = ''
 
@@ -183,12 +210,11 @@ print(json.dumps(char_indices, indent=4, sort_keys=True))
 with open(os.path.join(preprocessing_dir,"encodings"), "w") as out:
     out.write(json.dumps(char_indices, indent=4, sort_keys=True))
 
-
 # max number of characters allowed in a sentence, any additional are thrown out
-maxlen = 512
+maxlen = 200
 
 # max sentences allowed in a doc, any additional are thrown out
-max_sentences = 15
+max_sentences = 100
 
 def load_char_encodings():
     with open(os.path.join(preprocessing_dir, "encodings"), "r") as f:
@@ -222,7 +248,6 @@ X_test = encode_and_trim(test_docs, X_test, maxlen, max_sentences)
 
 print('Sample chars in X:{}'.format(X_train[20, 2]))
 print('y:{}'.format(y_train[12]))
-
 
 
 class LossHistory(keras.callbacks.Callback):
@@ -261,10 +286,10 @@ def max_1d(x):
 
 
 # max number of characters allowed in a sentence, any additional are thrown out
-maxlen = 512
+maxlen = 200
 
 # max sentences allowed in a doc, any additional are thrown out
-max_sentences = 15
+max_sentences = 100
 
 with tf.device("/gpu:0"): 
     filter_length = [5, 3, 3]
@@ -293,43 +318,44 @@ with tf.device("/gpu:0"):
         embedded = MaxPooling1D(pool_length=pool_length)(embedded)
 
 with tf.device("/gpu:1"): 
-    forward_sent = LSTM(128, return_sequences=False, dropout_W=0.35, dropout_U=0.35, consume_less='gpu')(embedded)
-    backward_sent = LSTM(128, return_sequences=False, dropout_W=0.35, dropout_U=0.35, consume_less='gpu', go_backwards=True)(embedded)
+    forward_sent = LSTM(128, return_sequences=False, dropout_W=0.2, dropout_U=0.2, consume_less='gpu')(embedded)
+    backward_sent = LSTM(128, return_sequences=False, dropout_W=0.2, dropout_U=0.2, consume_less='gpu', go_backwards=True)(embedded)
 
 
 
     sent_encode = merge([forward_sent, backward_sent], mode='concat', concat_axis=-1)
-    sent_encode = Dropout(0.3)(sent_encode)
+    sent_encode = Dropout(0.1)(sent_encode)
 
     encoder = Model(input=in_sentence, output=sent_encode)
     encoded = TimeDistributed(encoder)(document)
 
 with tf.device("/gpu:2"): 
-    forwards = LSTM(80, return_sequences=False, dropout_W=0.35, dropout_U=0.35, consume_less='gpu')(encoded)
-    backwards = LSTM(80, return_sequences=False, dropout_W=0.35, dropout_U=0.35, consume_less='gpu', go_backwards=True)(encoded)
+    forwards = LSTM(80, return_sequences=False, dropout_W=0.2, dropout_U=0.2, consume_less='gpu')(encoded)
+    backwards = LSTM(80, return_sequences=False, dropout_W=0.2, dropout_U=0.2, consume_less='gpu', go_backwards=True)(encoded)
 
 
 with tf.device("/gpu:3"): 
     merged = merge([forwards, backwards], mode='concat', concat_axis=-1)
-    output = Dropout(0.3)(merged)
+    output = Dropout(0.2)(merged)
     output = Dense(128, activation='relu')(output)
-    output = Dropout(0.3)(output)
+    output = Dropout(0.2)(output)
     output = Dense(1, activation='sigmoid')(output)
 
     model = Model(input=document, output=output)
 
     if checkpoint:
+        print("STARTING FROM CHECKPOINT")
         model.load_weights(os.path.join(model_dir, "checkpoints", checkpoint))
 
     file_name = os.path.basename(sys.argv[0]).split('.')[0]
     check_cb = keras.callbacks.ModelCheckpoint(os.path.join(model_dir, 'checkpoints/'+file_name+'.{epoch:02d}-{val_loss:.2f}.hdf5'),
-                                               monitor='val_loss', verbose=0, save_best_only=True, mode='min')
+                                               monitor='val_loss', verbose=0, save_best_only=False, mode='min')
     earlystop_cb = keras.callbacks.EarlyStopping(monitor='val_loss', patience=7, verbose=1, mode='auto')
     history = LossHistory()
     model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
 
     model.fit(X_train, y_train, validation_data=(X_test, y_test), batch_size=10, 
-    	nb_epoch=35, shuffle=True, callbacks=[earlystop_cb,check_cb, history])
+    	nb_epoch=7, shuffle=True, callbacks=[earlystop_cb,check_cb, history])
 
     # just showing access to the history object
     print(history.losses)
